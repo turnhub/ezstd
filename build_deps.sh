@@ -12,7 +12,14 @@ CPUS="$(getconf _NPROCESSORS_ONLN 2>/dev/null || sysctl -n hw.ncpu)"
 
 ZSTD_REPO="https://github.com/facebook/zstd.git"
 ZSTD_BRANCH="release"
+# Tags are mutable: upstream could re-point v1.5.7 at a malicious commit and we
+# would build it unknowingly. The pinned commit SHA below is the source of
+# truth for what we actually build; ZSTD_TAG is kept only for readability and
+# is verified against the SHA before building (see checkout_lib).
+# ZSTD_SHA is the commit that v1.5.7 currently resolves to:
+#   git ls-remote https://github.com/facebook/zstd.git 'v1.5.7^{}'
 ZSTD_TAG="v1.5.7"
+ZSTD_SHA="f8745da6ff1ad1e7bab384bd1f9d742439278e99"
 ZSTD_DIR="zstd"
 ZSTD_SUCCESS_FILE="lib/libzstd.a"
 
@@ -27,10 +34,11 @@ fail_check() {
 
 checkout_lib() {
     local repo_url="$1"
-    local tag="$2"
-    local branch="$3"
-    local dir_name="$4"
-    local success_file="$5"
+    local sha="$2"
+    local tag="$3"
+    local branch="$4"
+    local dir_name="$5"
+    local success_file="$6"
 
     local full_path="$DEPS_DIR/$dir_name/$success_file"
     if [ -f "$full_path" ]; then
@@ -39,7 +47,7 @@ checkout_lib() {
         return
     fi
 
-    echo "📦 Cloning $repo_url (branch: $branch, tag: $tag)"
+    echo "📦 Cloning $repo_url (branch: $branch, pinned commit: $sha)"
 
     mkdir -p "$DEPS_DIR"
     pushd "$DEPS_DIR" > /dev/null
@@ -49,7 +57,42 @@ checkout_lib() {
     fi
 
     pushd "$dir_name" > /dev/null
-    fail_check git checkout "$tag"
+
+    # Make sure the exact pinned commit is present locally. Cloning the branch
+    # normally fetches it (it is reachable from the release tag), but fetch it
+    # explicitly as a fallback so we never silently fall back to whatever the
+    # branch currently happens to point at.
+    if ! git cat-file -e "${sha}^{commit}" 2>/dev/null; then
+        fail_check git fetch origin "$sha"
+    fi
+
+    # Supply-chain safety: tags are mutable. If the human-readable tag is
+    # present, confirm it still resolves to the commit we pinned. A mismatch
+    # means upstream moved the tag (re-tagged) and we must refuse to build.
+    local tag_sha
+    tag_sha="$(git rev-list -n 1 "$tag" 2>/dev/null || true)"
+    if [ -n "$tag_sha" ] && [ "$tag_sha" != "$sha" ]; then
+        echo "❌ Supply-chain check failed for $dir_name" >&2
+        echo "   Tag '$tag' now resolves to $tag_sha" >&2
+        echo "   but the build is pinned to    $sha" >&2
+        echo "   The upstream tag appears to have been moved. Refusing to build." >&2
+        echo "   If this change is expected, update ZSTD_SHA in build_deps.sh." >&2
+        exit 1
+    fi
+
+    # Check out the pinned commit by SHA (detached HEAD) rather than the tag,
+    # so the build is reproducible and independent of tag mutations.
+    fail_check git checkout --quiet "$sha"
+
+    # Belt and braces: confirm HEAD really is the pinned commit.
+    local head_sha
+    head_sha="$(git rev-parse HEAD)"
+    if [ "$head_sha" != "$sha" ]; then
+        echo "❌ Expected HEAD to be $sha but got $head_sha" >&2
+        exit 1
+    fi
+    echo "🔒 Checked out pinned commit $sha ($tag)"
+
     build_library "$dir_name"
     popd > /dev/null
     popd > /dev/null
@@ -84,4 +127,4 @@ echo "   ➤ OS Type   : $OS"
 echo "   ➤ OS Name   : $KERNEL"
 echo "   ➤ CPU Cores : $CPUS"
 
-checkout_lib "$ZSTD_REPO" "$ZSTD_TAG" "$ZSTD_BRANCH" "$ZSTD_DIR" "$ZSTD_SUCCESS_FILE"
+checkout_lib "$ZSTD_REPO" "$ZSTD_SHA" "$ZSTD_TAG" "$ZSTD_BRANCH" "$ZSTD_DIR" "$ZSTD_SUCCESS_FILE"
