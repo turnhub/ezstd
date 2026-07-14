@@ -6,7 +6,11 @@
 
 ## [Zstd][1] binding for Erlang
 
-This binding is based on zstd v1.5.7. In case you want to modify the `zstd` version you can change `ZSTD_TAG` from `build_deps.sh`
+This binding is based on zstd v1.5.7. The build is pinned to an immutable commit SHA (`ZSTD_SHA` in `build_deps.sh`) rather than a mutable git tag, to protect against supply-chain attacks where a tag is re-pointed at a different commit upstream. To change the `zstd` version, update `ZSTD_SHA` (the `# vX.Y.Z` comment next to it is just for humans). You can find the commit a tag resolves to with:
+
+```sh
+git ls-remote https://github.com/facebook/zstd.git 'v1.5.7^{}'
+```
 
 ## API
 

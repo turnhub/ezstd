@@ -11,8 +11,11 @@ CPUS="$(getconf _NPROCESSORS_ONLN 2>/dev/null || sysctl -n hw.ncpu)"
 # https://github.com/facebook/zstd.git
 
 ZSTD_REPO="https://github.com/facebook/zstd.git"
-ZSTD_BRANCH="release"
-ZSTD_TAG="v1.5.7"
+# Pin to an immutable commit SHA instead of a mutable tag: tags can be
+# re-pointed at a different commit upstream, so trusting the tag alone is a
+# supply-chain risk. Resolve a tag to its commit with:
+#   git ls-remote https://github.com/facebook/zstd.git 'v1.5.7^{}'
+ZSTD_SHA="f8745da6ff1ad1e7bab384bd1f9d742439278e99" # v1.5.7
 ZSTD_DIR="zstd"
 ZSTD_SUCCESS_FILE="lib/libzstd.a"
 
@@ -27,10 +30,9 @@ fail_check() {
 
 checkout_lib() {
     local repo_url="$1"
-    local tag="$2"
-    local branch="$3"
-    local dir_name="$4"
-    local success_file="$5"
+    local sha="$2"
+    local dir_name="$3"
+    local success_file="$4"
 
     local full_path="$DEPS_DIR/$dir_name/$success_file"
     if [ -f "$full_path" ]; then
@@ -39,17 +41,19 @@ checkout_lib() {
         return
     fi
 
-    echo "📦 Cloning $repo_url (branch: $branch, tag: $tag)"
+    echo "📦 Cloning $repo_url (pinned commit: $sha)"
 
     mkdir -p "$DEPS_DIR"
     pushd "$DEPS_DIR" > /dev/null
 
     if [ ! -d "$dir_name" ]; then
-        fail_check git clone --branch "$branch" "$repo_url" "$dir_name"
+        # --no-tags keeps mutable tag refs off disk; we check out an immutable
+        # commit by SHA, so tags are never consulted or trusted.
+        fail_check git clone --no-tags "$repo_url" "$dir_name"
     fi
 
     pushd "$dir_name" > /dev/null
-    fail_check git checkout "$tag"
+    fail_check git checkout "$sha"
     build_library "$dir_name"
     popd > /dev/null
     popd > /dev/null
@@ -84,4 +88,4 @@ echo "   ➤ OS Type   : $OS"
 echo "   ➤ OS Name   : $KERNEL"
 echo "   ➤ CPU Cores : $CPUS"
 
-checkout_lib "$ZSTD_REPO" "$ZSTD_TAG" "$ZSTD_BRANCH" "$ZSTD_DIR" "$ZSTD_SUCCESS_FILE"
+checkout_lib "$ZSTD_REPO" "$ZSTD_SHA" "$ZSTD_DIR" "$ZSTD_SUCCESS_FILE"
